@@ -40,13 +40,17 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "Board_LED.h"                  // ::Board Support:LED
+//#include "core_cm3.h"
 #include "stm32f4xx_hal.h" // Keil::Device:STM32Cube HAL:Common
 #include "stm32f4xx_hal_adc_ex.h"
-#include "ADC_Init_example_STM32F4.h" 
+#include "stm32f4xx_hal_adc.h"
+#include "adc_f4.h"
 
 
-//Structure de données permettant de caractériser le périphérique pour le MANIPULER (Handle)
-extern ADC_HandleTypeDef myADC2Handle;
+
+//Structure de donnÃ©es permettant de caractÃ©riser le pÃ©riphÃ©rique pour le MANIPULER (Handle)
+ADC_HandleTypeDef myADC2Handle;
+
 
 #ifdef _RTE_
 #include "RTE_Components.h"             // Component selection
@@ -54,6 +58,7 @@ extern ADC_HandleTypeDef myADC2Handle;
 #ifdef RTE_CMSIS_RTOS2                  // when RTE component CMSIS RTOS2 is used
 #include "cmsis_os2.h"                  // ::CMSIS:RTOS2
 #endif
+
 
 #ifdef RTE_CMSIS_RTOS2_RTX5
 /**
@@ -90,9 +95,13 @@ uint32_t HAL_GetTick (void) {
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
+static __IO uint32_t TimingDelay;
 /* Private function prototypes -----------------------------------------------*/
 static void SystemClock_Config(void);
 static void Error_Handler(void);
+void Delay_Init(void);
+void Delay(__IO uint32_t nTime);
+void TimingDelay_Decrement(void);
 
 /* Private functions ---------------------------------------------------------*/
 /**
@@ -102,7 +111,7 @@ static void Error_Handler(void);
   */
 int main(void)
 {
-int x; 
+	unsigned int x; // variable de retour 
   /* STM32F4xx HAL library initialization:
        - Configure the Flash prefetch, Flash preread and Buffer caches
        - Systick timer is configured by default as source of time base, but user 
@@ -121,8 +130,8 @@ int x;
   /* Add your application code here
      */
 	LED_Initialize();
-	
-
+	Delay_Init();
+	ADC_Initialize(&myADC2Handle,8); // intialisation de CAN sur le pin PA1
 #ifdef RTE_CMSIS_RTOS2	// A commenter si utilisation RTOS
   /* Initialize CMSIS-RTOS2 */
   osKernelInitialize ();
@@ -134,37 +143,38 @@ int x;
   osKernelStart();
 #endif
 
-//conversions adc 
-init_PIN_PA0();   //initialisation pins
-HAL_ADC_Init (& myADC2Handle); //init du convertisseur 
-HAL_ADC_Start ( & myADC2Handle);// init et conversion ADC
+	HAL_ADC_Start(& myADC2Handle); // start A/D conversion
   /* Infinite loop */
   while (1)
   {
-		LED_On (1);//led 3 dans la carte
-	
-		while(HAL_ADC_PollForConversion(& myADC2Handle, 15) == HAL_OK){ //verifie si la conversion est faite
+		LED_On (1);
+		while(HAL_ADC_PollForConversion(& myADC2Handle, 15) == HAL_OK){  //Check if conversion is completed with 15 cycles
 		x=HAL_ADC_GetValue(& myADC2Handle); // lire la valeur une fois que la conversion est fini
 		HAL_ADC_Stop(& myADC2Handle); //arret la conversion
-			
+		
+		
+		 
 		if (x==0){
 		//LED_Off (1);//led 3 dans la carte
-		LED_On (2); 	//led 5 dans la carte
+		LED_On(2); 	//led 5 dans la carte
 		}
-		if (x>5){
+		if ((x>950) && (x<1800)){
 		//LED_Off(1); //led 3 dans la carte
 		LED_On(3); 	//led 6 dans la carte
 		}
-		else{
-		LED_Off(3); 
-		}
-		if ((x>=1095) || (x>=50)|| (x>=20)){
+		if (x>2300){
 		//LED_Off(1); //led 3 dans la carte
-		//LED_On (0); //led 4 dans la carte
+		LED_On(0); 	//led 6 dans la carte
 		}
+		else{
+		LED_Off(0); 
+		LED_Off(2);
+		LED_Off(3);
+		}
+			
+		}
+	}
 
-}}
-return 0;
 }
 
 /**
@@ -280,3 +290,44 @@ void assert_failed(uint8_t* file, uint32_t line)
   */ 
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+/* Private variables ---------------------------------------------------------*/	 
+static __IO uint32_t TimingDelay;
+
+void Delay_Init(void)
+{
+  if (SysTick_Config(SystemCoreClock / 1000))
+  { 
+    /* Capture error */ 
+    while (1);
+  }
+}
+
+/**
+  * @brief  Inserts a delay time.
+  * @param  nTime: specifies the delay time length, in milliseconds.
+  * @retval None
+  */
+void Delay(__IO uint32_t nTime)
+{ 
+  TimingDelay = nTime;
+
+  while(TimingDelay != 0);
+}
+
+/**
+  * @brief  Decrements the TimingDelay variable.
+  * @param  None
+  * @retval None
+  */
+void TimingDelay_Decrement(void)
+{
+  if (TimingDelay != 0x00)
+  { 
+    TimingDelay--;
+  }
+}
+
+/*********************************************************************************************************
+      END FILE
+*********************************************************************************************************/
+
