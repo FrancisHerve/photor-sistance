@@ -47,9 +47,13 @@
 
 #include "Driver_SPI.h"                 // ::CMSIS Driver:SPI
 #include "Board_LED.h"                  // ::Board Support:LED
+
+#include "stm32f4xx_hal.h" // Keil::Device:STM32Cube HAL:Common
+#include "stm32f4xx_hal_adc_ex.h"
+#include "stm32f4xx_hal_adc.h"
 #include "adc_F4.h"
 
-#include "stm32f4xx_hal.h"              // Keil::Device:STM32Cube HAL:Common
+
 
 
 #ifdef _RTE_
@@ -99,6 +103,7 @@ uint32_t HAL_GetTick (void) {
 extern ARM_DRIVER_SPI Driver_SPI1;
 static __IO uint32_t TimingDelay;
 ADC_HandleTypeDef myADC2Handle;
+
 /* Private function prototypes -----------------------------------------------*/
 static void SystemClock_Config(void);
 static void Error_Handler(void);
@@ -114,9 +119,19 @@ void mySPI_Thread (void const *argument);                             // thread 
 osThreadId tid_mySPI_Thread;                                          // thread id
 osThreadDef (mySPI_Thread, osPriorityNormal, 1, 0);                   // thread object
 
-void photo_res(void const *argument);
-osThreadId tid_photo_res;                                          // thread id
-osThreadDef (photo_res, osPriorityNormal, 1, 0);                   // thread object
+void photo_res_env(void const *argument);
+osThreadId tid_photo_res_env;                                          // thread id
+osThreadDef (photo_res_env, osPriorityNormal, 1, 0);                   // thread object
+
+
+void photo_res_recept(void const *argument);
+osThreadId tid_photo_res_recept;                                          // thread id
+osThreadDef (photo_res_recept, osPriorityNormal, 1, 0);                   // thread object
+
+
+osMailQId Id_ma_bal;																											// BAL id
+osMailQDef(ma_bal,24,myADC2Handle);																			// avec myADC2Handle contenant la valeur de retour	
+
 
 /* Private functions ---------------------------------------------------------*/
 /**
@@ -151,23 +166,27 @@ int main(void)
 	Init_SPI();
 	LED_Initialize ();
 	ADC_Initialize(&myADC2Handle,1); // intialisation de CAN sur le pin PA1
-  /* Create thread functions that start executing, 
+  
+	/* Create thread functions that start executing, 
   Example: osThreadNew(app_main, NULL, NULL); */
-			tid_mySPI_Thread = osThreadCreate (osThread(mySPI_Thread), NULL);
-  /* Start thread execution */
+	tid_mySPI_Thread = osThreadCreate (osThread(mySPI_Thread), NULL);  //création du thread qui s'occupe de l'allumage des leds
+	tid_photo_res_env = osThreadCreate (osThread(photo_res_env), NULL); // création du thread qui s'occupe de l'envoie de la valeur
+  tid_photo_res_recept = osThreadCreate (osThread(photo_res_recept), NULL); //création du thread qui s'occupe de la réception de la valeur
+	Id_ma_bal = osMailCreate(osMailQ(ma_bal),NULL); //création de la Mailbox
+	
+	/* Start thread execution */
   osKernelStart();
 	//LED_On (3);
+
 //#endif
 	osDelay(osWaitForever);
 	
   /* Infinite loop */
-//	while (1)
- // {
-		//	LED_On (1);
-		//  LED_On (2);
-	
-//	}
+//  while (1)
+//  {
+ // }
 }
+
 /* Private functions ---------------------------------------------------------*/
 /**
   * @brief  Initialize SPI Driver
@@ -188,6 +207,7 @@ void Init_SPI(void){
 	/* SS line = INACTIVE = HIGH */
 	//Driver_SPI1.Control(ARM_SPI_CONTROL_SS, ARM_SPI_SS_INACTIVE);
 }
+
 
 /* Private functions ---------------------------------------------------------*/
 /**
@@ -257,6 +277,55 @@ void mySPI_callback(uint32_t event){
   }
 	
 }
+/* Private functions ---------------------------------------------------------*/
+/**
+  * @brief   valeur du capteur transmission
+  * @param  None
+  * @retval None
+  */
+void photo_res_env(void const *argument){
+  unsigned int valeur;
+	osEvent evt;
+	char *ptr;
+	
+	
+	while(1){
+		HAL_ADC_Start(&myADC2Handle); // start A/D conversion
+		while(HAL_ADC_PollForConversion(&myADC2Handle, 15) != HAL_OK);  //Check if conversion is completed with 15 cycles
+		valeur=HAL_ADC_GetValue(&myADC2Handle); // lire la valeur une fois que la conversion est fini
+		HAL_ADC_Stop(&myADC2Handle); //arret la conversion
+					
+		
+		if (valeur > 2300){
+		ptr=osMailAlloc(Id_ma_bal,osWaitForever);
+		*ptr=valeur;
+		osMailPut(Id_ma_bal,ptr); 
+		}
+		osDelay(100);
+	
+ }
+}
+/* Private functions ---------------------------------------------------------*/
+/**
+  * @brief  valeur du capteur reception
+  * @param  None
+  * @retval None
+  */
+void photo_res_recept(void const *argument){
+	char *recep, valeur_recue;
+	osEvent EVretour;
+	
+	while(1){
+	EVretour = osMailGet(Id_ma_bal, osWaitForever);
+	recep=EVretour.value.p;
+	valeur_recue = *recep;
+	
+	
+	osMailFree(Id_ma_bal,recep);
+	osDelay(100);	
+	
+	}	
+}
 
 
 /**
@@ -272,8 +341,6 @@ void Delay_Init(void)
     while (1);
   }
 }
-
-
 
 /**
   * @brief  Inserts a delay time.
@@ -302,26 +369,6 @@ void TimingDelay_Decrement(void)
 }
 
 
-
-void photo_res(void const *argument){
-  unsigned int valeur;
-	osEvent evt;
-	
-	while(1){
-		HAL_ADC_Start(&myADC2Handle); // start A/D conversion
-		while(HAL_ADC_PollForConversion(&myADC2Handle, 15) != HAL_OK);  //Check if conversion is completed with 15 cycles
-		valeur=HAL_ADC_GetValue(&myADC2Handle); // lire la valeur une fois que la conversion est fini
-		HAL_ADC_Stop(&myADC2Handle); //arret la conversion
-					
-		
-		if (valeur > 2300){
-			osSignalSet(tid_mySPI_Thread, 0x01);
-    }
-		//evt = osSignalWait(0x01, osWaitForever);	// sommeil fin emission
-		osDelay(100);
-	
- }
-}
 
 /**
   * @brief  System Clock Configuration
