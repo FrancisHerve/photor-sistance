@@ -119,12 +119,12 @@ void mySPI_Thread (void const *argument);                             // thread 
 osThreadId tid_mySPI_Thread;                                          // thread id
 osThreadDef (mySPI_Thread, osPriorityNormal, 1, 0);                   // thread object
 
-void photo_res_env(void const *argument);
+void photo_res_env(void const *argument);															// thread function
 osThreadId tid_photo_res_env;                                          // thread id
 osThreadDef (photo_res_env, osPriorityNormal, 1, 0);                   // thread object
 
 
-void photo_res_recept(void const *argument);
+void photo_res_recept(void const *argument);															// thread function
 osThreadId tid_photo_res_recept;                                          // thread id
 osThreadDef (photo_res_recept, osPriorityNormal, 1, 0);                   // thread object
 
@@ -163,6 +163,7 @@ int main(void)
   /* Initialize CMSIS-RTOS2 */
   osKernelInitialize ();
 	
+	Delay_Init();
 	Init_SPI();
 	LED_Initialize ();
 	ADC_Initialize(&myADC2Handle,1); // intialisation de CAN sur le pin PA1
@@ -227,8 +228,8 @@ void mySPI_Thread (void const *argument){
 		// 4 LED bleues 
 		for (nb_led = 0; nb_led <4;nb_led++){
 			tab[4+nb_led*4]=0xff; // luminosité
-			tab[5+nb_led*4]=0x00; // couleur bleue
-			tab[6+nb_led*4]=0xff; // couleur verte
+			tab[5+nb_led*4]=0xff; // couleur bleue
+			tab[6+nb_led*4]=0x00; // couleur verte
 			tab[7+nb_led*4]=0x00; // couleur rouge
 			}
 /*	
@@ -300,8 +301,9 @@ void photo_res_env(void const *argument){
 		ptr=osMailAlloc(Id_ma_bal,osWaitForever);
 		*ptr=valeur;
 		osMailPut(Id_ma_bal,ptr); 
-		}
 		osDelay(100);
+		}
+		
 	
  }
 }
@@ -320,7 +322,9 @@ void photo_res_recept(void const *argument){
 	recep=EVretour.value.p;
 	valeur_recue = *recep;
 	
-	
+		if (valeur_recue >=2400){
+	  osSignalSet(tid_mySPI_Thread, 0x02);
+		}
 	osMailFree(Id_ma_bal,recep);
 	osDelay(100);	
 	
