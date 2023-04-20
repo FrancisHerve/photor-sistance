@@ -1,8 +1,12 @@
 /**
+ * Système pilotage LED avec RTOS sur STMF4
+ * POL = 1 pour CLK à 1 en idle, PHA = 0 pour lecture sur front montant. de CLK
+ * 
   ******************************************************************************
   * @file    Templates/Src/main.c 
-  * @author  MCD Application Team
-  * @brief   STM32F4xx HAL API Template project 
+  * @author  MCD Application Team + XM
+  * @brief   Gestion de LED SPI type SK9822. Ex avec allumage 9 LED RGB
+  *          PA7 = MOSI, PA5 = CLK
   *
   * @note    modified by ARM
   *          The modifications allow to use this file as User Code Template
@@ -39,17 +43,17 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"                   // ARM::CMSIS:RTOS:Keil RTX
+
+#include "Driver_SPI.h"                 // ::CMSIS Driver:SPI
 #include "Board_LED.h"                  // ::Board Support:LED
-//#include "core_cm3.h"
+
 #include "stm32f4xx_hal.h" // Keil::Device:STM32Cube HAL:Common
 #include "stm32f4xx_hal_adc_ex.h"
 #include "stm32f4xx_hal_adc.h"
-#include "adc_f4.h"
+#include "adc_F4.h"
 
 
-
-//Structure de données permettant de caractériser le périphérique pour le MANIPULER (Handle)
-ADC_HandleTypeDef myADC2Handle;
 
 
 #ifdef _RTE_
@@ -58,6 +62,7 @@ ADC_HandleTypeDef myADC2Handle;
 #ifdef RTE_CMSIS_RTOS2                  // when RTE component CMSIS RTOS2 is used
 #include "cmsis_os2.h"                  // ::CMSIS:RTOS2
 #endif
+
 
 
 #ifdef RTE_CMSIS_RTOS2_RTX5
@@ -95,13 +100,38 @@ uint32_t HAL_GetTick (void) {
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
+extern ARM_DRIVER_SPI Driver_SPI1;
 static __IO uint32_t TimingDelay;
+ADC_HandleTypeDef myADC2Handle;
+
 /* Private function prototypes -----------------------------------------------*/
 static void SystemClock_Config(void);
 static void Error_Handler(void);
+
 void Delay_Init(void);
 void Delay(__IO uint32_t nTime);
 void TimingDelay_Decrement(void);
+
+void Init_SPI(void);
+void mySPI_callback(uint32_t event);
+
+void mySPI_Thread (void const *argument);                             // thread function
+osThreadId tid_mySPI_Thread;                                          // thread id
+osThreadDef (mySPI_Thread, osPriorityNormal, 1, 0);                   // thread object
+
+void photo_res_env(void const *argument);															// thread function
+osThreadId tid_photo_res_env;                                          // thread id
+osThreadDef (photo_res_env, osPriorityNormal, 1, 0);                   // thread object
+
+
+void photo_res_recept(void const *argument);															// thread function
+osThreadId tid_photo_res_recept;                                          // thread id
+osThreadDef (photo_res_recept, osPriorityNormal, 1, 2000);                   // thread object
+
+
+osMailQId Id_ma_bal;																											// BAL id
+osMailQDef(ma_bal,1,myADC2Handle);																			// avec myADC2Handle contenant la valeur de retour	
+
 
 /* Private functions ---------------------------------------------------------*/
 /**
@@ -111,7 +141,7 @@ void TimingDelay_Decrement(void);
   */
 int main(void)
 {
-	unsigned int x; // variable de retour 
+
   /* STM32F4xx HAL library initialization:
        - Configure the Flash prefetch, Flash preread and Buffer caches
        - Systick timer is configured by default as source of time base, but user 
@@ -129,53 +159,240 @@ int main(void)
 
   /* Add your application code here
      */
-	LED_Initialize();
-	Delay_Init();
-	ADC_Initialize(&myADC2Handle,8); // intialisation de CAN sur le pin PA1
-#ifdef RTE_CMSIS_RTOS2	// A commenter si utilisation RTOS
+	//#ifdef RTE_CMSIS_RTOS2
   /* Initialize CMSIS-RTOS2 */
   osKernelInitialize ();
-
-  /* Create thread functions that start executing, 
+	
+	Delay_Init();
+	Init_SPI();
+	LED_Initialize ();
+	ADC_Initialize(&myADC2Handle,1); // intialisation de CAN sur le pin PA1
+  
+	/* Create thread functions that start executing, 
   Example: osThreadNew(app_main, NULL, NULL); */
-
-  /* Start thread execution */
+	//tid_mySPI_Thread = osThreadCreate (osThread(mySPI_Thread), NULL);  //création du thread qui s'occupe de l'allumage des leds
+	tid_photo_res_env = osThreadCreate (osThread(photo_res_env), NULL); // création du thread qui s'occupe de l'envoie de la valeur
+  tid_photo_res_recept = osThreadCreate (osThread(photo_res_recept), NULL); //création du thread qui s'occupe de la réception de la valeur
+	Id_ma_bal = osMailCreate(osMailQ(ma_bal),NULL); //création de la Mailbox
+	
+	/* Start thread execution */
   osKernelStart();
-#endif
+	//LED_On (3);
 
-	HAL_ADC_Start(& myADC2Handle); // start A/D conversion
+//#endif
+	osDelay(osWaitForever);
+	
   /* Infinite loop */
-  while (1)
-  {
-		LED_On (1);
-		while(HAL_ADC_PollForConversion(& myADC2Handle, 15) == HAL_OK){  //Check if conversion is completed with 15 cycles
-		x=HAL_ADC_GetValue(& myADC2Handle); // lire la valeur une fois que la conversion est fini
-		HAL_ADC_Stop(& myADC2Handle); //arret la conversion
-		
-		
-		 
-		if (x==0){
-		//LED_Off (1);//led 3 dans la carte
-		LED_On(2); 	//led 5 dans la carte
-		}
-		if ((x>950) && (x<1800)){
-		//LED_Off(1); //led 3 dans la carte
-		LED_On(3); 	//led 6 dans la carte
-		}
-		if (x>2300){
-		//LED_Off(1); //led 3 dans la carte
-		LED_On(0); 	//led 6 dans la carte
-		}
-		else{
-		LED_Off(0); 
-		LED_Off(2);
-		LED_Off(3);
-		}
-			
-		}
+//  while (1)
+//  {
+ // }
+}
+
+/* Private functions ---------------------------------------------------------*/
+/**
+  * @brief  Initialize SPI Driver
+  * @param  None
+  * @retval None
+  */
+void Init_SPI(void){
+	/* Initialize the SPI driver */
+	Driver_SPI1.Initialize(mySPI_callback);
+	 /* Power up the SPI peripheral */
+	Driver_SPI1.PowerControl(ARM_POWER_FULL);
+	/* Configure the SPI to Master, 8-bit mode @1 MBits/sec */
+	Driver_SPI1.Control(ARM_SPI_MODE_MASTER | 
+											ARM_SPI_CPOL1_CPHA1 | 
+//										ARM_SPI_MSB_LSB | 
+											ARM_SPI_SS_MASTER_UNUSED |
+											ARM_SPI_DATA_BITS(8), 1000000);
+	/* SS line = INACTIVE = HIGH */
+	//Driver_SPI1.Control(ARM_SPI_CONTROL_SS, ARM_SPI_SS_INACTIVE);
+}
+
+
+/* Private functions ---------------------------------------------------------*/
+/**
+  * @brief  Thread SPI Communication
+  * @param  None
+  * @retval None
+  */
+void mySPI_Thread (void const *argument){
+	osEvent evt;
+	char tab[24]; // 4 octets de sof +4 leds (4*4= 16 octets) +4 octets eof 
+	char tab1[24]; 
+	int i, nb_led;
+	
+	for (i=0;i<4;i++){ // sof
+		tab[i] = 0;
 	}
+		
+		// 4 LED bleues 
+		for (nb_led = 0; nb_led <4;nb_led++){
+			tab[4+nb_led*4]=0xff; // luminosité
+			tab[5+nb_led*4]=0xff ; // couleur bleue
+			tab[6+nb_led*4]=0x00; // couleur verte
+			tab[7+nb_led*4]=0x00; // couleur rouge
+			}
+	
+			
+		for (i=0;i<4;i++){ // eof
+		tab[20+i] = 0;
+	}		
+
+
+	
+  while (1) {
+		Driver_SPI1.Send(tab,24);
+    evt = osSignalWait(0x01, osWaitForever);	// sommeil jusqu'à  fin emission
+	osDelay(1000);
+			
+  }
 
 }
+
+
+/* Private functions ---------------------------------------------------------*/
+/**
+  * @brief  SPI Callback
+  * @param  None
+  * @retval None
+  */
+
+void mySPI_callback(uint32_t event){
+	if (event & ARM_SPI_EVENT_TRANSFER_COMPLETE) {
+    /* Transfer or receive is finished */
+		osSignalSet(tid_photo_res_recept, 0x01);
+  }
+	
+}
+/* Private functions ---------------------------------------------------------*/
+/**
+  * @brief   valeur du capteur transmission
+  * @param  None
+  * @retval None
+  */
+void photo_res_env(void const *argument){
+  unsigned int valeur;
+	osEvent evt;
+	int *ptr;
+	
+	
+	while(1){
+		HAL_ADC_Start(&myADC2Handle); // start A/D conversion
+		while(HAL_ADC_PollForConversion(&myADC2Handle, 15) != HAL_OK);  //Check if conversion is completed with 15 cycles
+		valeur=HAL_ADC_GetValue(&myADC2Handle); // lire la valeur une fois que la conversion est fini
+		HAL_ADC_Stop(&myADC2Handle); //arrêt la conversion
+					
+		
+		ptr=osMailAlloc(Id_ma_bal,osWaitForever);
+		*ptr=valeur;                                           // valeur à envoyer
+		osMailPut(Id_ma_bal,ptr);                               //Envoi
+		osDelay(1000);
+		
+	
+ }
+}
+/* Private functions ---------------------------------------------------------*/
+/**
+  * @brief  valeur du capteur reception
+  * @param  None
+  * @retval None
+  */
+void photo_res_recept(void const *argument){
+	int *recep, valeur_recue;
+	osEvent EVretour;
+	char tab[24]; // 4 octets de sof +4 leds (4*4= 16 octets) +4 octets eof 
+	char tab1[24]; 
+	int i, nb_led;
+	
+	for (i=0;i<4;i++){ // sof
+		tab[i] = 0;
+	}
+		
+		// 4 LED bleues 
+		for (nb_led = 0; nb_led <4;nb_led++){
+			tab[4+nb_led*4]=0xff; // luminosité
+			tab[5+nb_led*4]=0xff ; // couleur bleue
+			tab[6+nb_led*4]=0x00; // couleur verte
+			tab[7+nb_led*4]=0x00; // couleur rouge
+			}
+	
+			
+		for (i=0;i<4;i++){ // eof
+		tab[20+i] = 0;
+	}	
+	
+	
+	
+	while(1){
+	EVretour = osMailGet(Id_ma_bal, osWaitForever);   // attente mail
+	recep=EVretour.value.p;                           // on récupère le pointeur...
+	valeur_recue = *recep;                            // ...et la valeur pointé
+	
+		osMailFree(Id_ma_bal,recep);                     // libération mémoire allouée
+	
+		if(valeur_recue <2300){
+			for (nb_led = 0; nb_led <4;nb_led++){
+			tab[4+nb_led*4]=0xff; // luminosité
+			tab[5+nb_led*4]=0xff ; // couleur bleue
+			}
+		}
+		else{
+		for (nb_led = 0; nb_led <4;nb_led++){
+			tab[4+nb_led*4]=0x00; // luminosité
+			tab[5+nb_led*4]=0x00 ; // couleur bleue
+		}
+		Driver_SPI1.Send(tab,24);
+    EVretour = osSignalWait(0x01, osWaitForever);	// sommeil jusqu'à  fin emission
+	
+		
+	osDelay(500);	
+	
+	}	
+}
+}
+
+/**
+  * @brief  Initialize delay time.
+  * @param  None
+  * @retval None
+  */
+void Delay_Init(void)
+{
+  if (SysTick_Config(SystemCoreClock / 1000))
+  { 
+    /* Capture error */ 
+    while (1);
+  }
+}
+
+/**
+  * @brief  Inserts a delay time.
+  * @param  nTime: specifies the delay time length, in milliseconds.
+  * @retval None
+  */
+void Delay(__IO uint32_t nTime)
+{ 
+  TimingDelay = nTime;
+
+  while(TimingDelay != 0);
+}
+
+
+/**
+  * @brief  Decrements the TimingDelay variable.
+  * @param  None
+  * @retval None
+  */
+void TimingDelay_Decrement(void)
+{
+  if (TimingDelay != 0x00)
+  { 
+    TimingDelay--;
+  }
+}
+
+
 
 /**
   * @brief  System Clock Configuration
@@ -187,7 +404,7 @@ int main(void)
   *            APB1 Prescaler                 = 4
   *            APB2 Prescaler                 = 2
   *            HSE Frequency(Hz)              = 8000000
-  *            PLL_M                          = 8
+  *            PLL_M                          = 25
   *            PLL_N                          = 336
   *            PLL_P                          = 2
   *            PLL_Q                          = 7
@@ -290,44 +507,3 @@ void assert_failed(uint8_t* file, uint32_t line)
   */ 
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
-/* Private variables ---------------------------------------------------------*/	 
-static __IO uint32_t TimingDelay;
-
-void Delay_Init(void)
-{
-  if (SysTick_Config(SystemCoreClock / 1000))
-  { 
-    /* Capture error */ 
-    while (1);
-  }
-}
-
-/**
-  * @brief  Inserts a delay time.
-  * @param  nTime: specifies the delay time length, in milliseconds.
-  * @retval None
-  */
-void Delay(__IO uint32_t nTime)
-{ 
-  TimingDelay = nTime;
-
-  while(TimingDelay != 0);
-}
-
-/**
-  * @brief  Decrements the TimingDelay variable.
-  * @param  None
-  * @retval None
-  */
-void TimingDelay_Decrement(void)
-{
-  if (TimingDelay != 0x00)
-  { 
-    TimingDelay--;
-  }
-}
-
-/*********************************************************************************************************
-      END FILE
-*********************************************************************************************************/
-
